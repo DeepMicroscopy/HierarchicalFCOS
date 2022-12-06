@@ -9,7 +9,7 @@ from numpy import random
 from torchvision.transforms.functional import to_tensor        
 
 class MultiClassObjectsDataset(torch.utils.data.Dataset):
-    def __init__(self, annotations_dict, slide_names, path_to_slides, labels, crop_size = (128,128), pseudo_epoch_length:int = 1000, transformations = None, sampling='randomCategories'):
+    def __init__(self, annotations_dict, slide_names, path_to_slides, labels, crop_size = (128,128), prob_stratified_sampling=0.7, pseudo_epoch_length:int = 1000, transformations = None, sampling='randomCategories'):
         super().__init__()
         
         self.separator = os.sep
@@ -18,19 +18,27 @@ class MultiClassObjectsDataset(torch.utils.data.Dataset):
         self.slide_names = slide_names
         self.path_to_slides = path_to_slides
         self.crop_size = crop_size
+        self.prob_stratified_sampling = prob_stratified_sampling
         self.pseudo_epoch_length = pseudo_epoch_length
         # highest value in labels
         self.labels = labels
-         
+
         # list which holds annotations of all slides in slide_names in the format
         # slide_name, annotation, label, min_x, max_x, min_y, max_y
         
         self.slide_dict, self.annotations_list, self.labels_ordered_dict = self._initialize()
+        
+        self.sampling=sampling
+        self.continuous_cord_list = self._continuous_cord_list()
         if (sampling=='randomCategories'):
             self.sample_cord_list = self._sample_cord_list()
+        elif (sampling=='continuous'):
+            self.sample_cord_list = self.continuous_cord_list
         else:
-            self.sample_cord_list = self._continuous_cord_list()
-            
+            raise('Invalid value for parameter sampling. Choose either randomCategories or continuous')
+        
+        
+        
         self.transformations = transformations 
         # set up transformations
         if transformations != None:
@@ -44,6 +52,7 @@ class MultiClassObjectsDataset(torch.utils.data.Dataset):
         slide_dict = {}
         
         labels_ordered_dict = {l : [] for l in self.labels}
+        labels_ordered_dict[-2] = [] # hard example class
         annotations_list = []
         for slide in self.slide_names:
             if os.path.exists(slide):
@@ -76,10 +85,11 @@ class MultiClassObjectsDataset(torch.utils.data.Dataset):
 
     
     def _sample_cord_list(self, offset = 50):
+        
         # select random labels
         labels = random.choice(self.labels, size = self.pseudo_epoch_length, replace = True)
         # select coordinates where these labels are present
-        print(f'{[len(i) for i in self.labels_ordered_dict.values()]}')
+        print('Labels for sampling', {i:len(self.labels_ordered_dict[i]) for i in self.labels_ordered_dict.keys()})
         
         indice = [random.choice(len(self.labels_ordered_dict[l])) for l in labels]
         annos = [self.labels_ordered_dict[l][i] for l,i in zip(labels,indice)]
@@ -119,7 +129,9 @@ class MultiClassObjectsDataset(torch.utils.data.Dataset):
         return len(self.sample_cord_list)
 
     def _get_boxes_and_label(self,slide,x_cord,y_cord):
-        return [line[2::] for line in self.annotations_list if line[0] == slide and line[3] > x_cord and line [4] > y_cord and line[5] < x_cord + self.crop_size[0] and line[6] < y_cord + self.crop_size[1]]
+        # annotation_list elements: [slide, annotation, label, min_x, min_y, max_x, max_y]
+        # removes also all annotations of class < -1 (i.e., non-mitotic figures)
+        return [line[2::] for line in self.annotations_list if line[0] == slide and line[2]>-2 and line[3] > x_cord and line [4] > y_cord and line[5] < x_cord + self.crop_size[0] and line[6] < y_cord + self.crop_size[1]]
     
     def _check_for_degenerated_boxes(self,boxes,labels, th = 5):
         '''
@@ -162,7 +174,16 @@ class FlatObjectsDataset(MultiClassObjectsDataset):
 
 
     def __getitem__(self,index):
-        slide, x_cord, y_cord = self.sample_cord_list[index]
+        if (np.random.rand()<self.prob_stratified_sampling) or self.sampling=='continuous':
+            slide, x_cord, y_cord = self.sample_cord_list[index]
+        else:
+            # labels_ordered_dict: [slide, annotation, label, min_x, min_y, max_x, max_y]
+            slide, _,_,x_cord, y_cord,_,_ = self.labels_ordered_dict[-2][np.random.randint(len(self.labels_ordered_dict[-2]))]
+            x_cord = x_cord - (self.crop_size[0] // 2)
+            y_cord = y_cord - (self.crop_size[1] // 2)
+            
+
+        
         x_cord = np.int64(x_cord)
         y_cord = np.int64(y_cord)
         # load image
@@ -197,8 +218,6 @@ class FlatObjectsDataset(MultiClassObjectsDataset):
             img = to_tensor(img)
         
         
-        
-        
         # check if boxes are valid
         boxes, labels = self._check_for_degenerated_boxes(boxes,labels)
         # check if boxes left, if not insert empty one
@@ -209,7 +228,8 @@ class FlatObjectsDataset(MultiClassObjectsDataset):
         target = {
             'boxes': boxes,
             'labels':labels,
-            'slide':slide
+            'slide':slide,
+            'coords': (x_cord,y_cord)
         }
 
         return img, target
@@ -219,7 +239,14 @@ class HierarchicalSublabelsObjectsDataset(MultiClassObjectsDataset):
 
 
     def __getitem__(self,index):
-        slide, x_cord, y_cord = self.sample_cord_list[index]
+        if (np.random.rand()<self.prob_stratified_sampling) or self.sampling=='continuous':
+            slide, x_cord, y_cord = self.sample_cord_list[index]
+        else:
+            # labels_ordered_dict: [slide, annotation, label, min_x, min_y, max_x, max_y]
+            slide, _,_,x_cord, y_cord,_,_ = self.labels_ordered_dict[-2][np.random.randint(len(self.labels_ordered_dict[-2]))]
+            x_cord = x_cord - (self.crop_size[0] // 2)
+            y_cord = y_cord - (self.crop_size[1] // 2)
+            
         x_cord = np.int64(x_cord)
         y_cord = np.int64(y_cord)
         # load image
@@ -278,7 +305,8 @@ class HierarchicalSublabelsObjectsDataset(MultiClassObjectsDataset):
             'labels':labels, # 1 for mitosis
             'sub_labels':(sub_labels>0).long()-(sub_labels<0).long(), # -1 for ambiguous, 0 for AMF or 1 for typical MF
             'sub_labels_l2': sub_labels-1+(sub_labels<0).long(), # 0 to 3 for typical subtypes, else -1
-            'slide':slide
+            'slide':slide,
+            'coords': (x_cord,y_cord)
         }
 
         return img, target    

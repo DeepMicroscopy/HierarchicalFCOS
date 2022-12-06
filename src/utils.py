@@ -7,6 +7,37 @@ def calc_center(boxes):
     cy = (boxes[:, 1] + boxes[:, 3]) / 2
     return cx,cy
 
+def get_number_of_fps(boxes,scores,annos, radius = 25, det_th = 0.5):
+    keep = scores > det_th
+    boxes = boxes[keep]
+
+    # calc center of predicted boxes
+    cx_pred, cy_pred = calc_center(boxes)
+    # calc center of target boxes
+    cx_gt,cy_gt = calc_center(annos)
+
+    isDet = np.zeros(boxes.shape[0] + annos.shape[0])
+    isDet[0:boxes.shape[0]] = 1 
+
+    if annos.shape[0] > 0 and boxes.shape[0] > 0:
+        cx = np.hstack((cx_pred, cx_gt))
+        cy = np.hstack((cy_pred, cy_gt))
+        # set up kdtree 
+        X = np.dstack((cx, cy))[0]
+        # build a KDTree with annotations
+        tree = KDTree(X[isDet == 0])
+
+        # query tree with predictions, ind contains the index of the annotation which matches the prediction
+        ind,dist = tree.query_radius(X[isDet == 1], r=radius, return_distance = True, sort_results = True)
+
+        # delete doubeling neigbours
+        ind = np.array([i[0] if len(i) > 0 else -1 for i in ind])
+        return np.sum(ind==-1)
+    
+    else:
+        return len(boxes)
+    
+
 def match_scores_targets(boxes,scores,reg_scores,annos,reg_targets, radius = 25, det_th = 0.5):
     keep = scores > det_th
     boxes = boxes[keep]
