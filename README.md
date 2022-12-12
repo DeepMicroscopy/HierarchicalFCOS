@@ -1,5 +1,5 @@
 # HierarchicalFCOS
-Deep-learning bysed Subtyping for Atypical and Typical Mitosis using a Hierarchical Anchor-Free Object Detector
+## Deep-learning bysed Subtyping for Atypical and Typical Mitosis using a Hierarchical Anchor-Free Object Detector
 
 This repository shows the training scripts we used for our BVM workshop submission "Deep learning-based Subtyping for Atypical and Typical Mitosis using a Hierarchical Anchor-Free Object Detector".
 
